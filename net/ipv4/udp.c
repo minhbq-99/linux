@@ -1811,6 +1811,31 @@ int udp_read_sock(struct sock *sk, read_descriptor_t *desc,
 }
 EXPORT_SYMBOL(udp_read_sock);
 
+int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	struct sk_buff *skb;
+	int copied = 0, err = 0;
+
+	lock_sock(sk);
+	skb_queue_walk(&sk->sk_write_queue, skb) {
+		/*
+		 * Dump the datagram's data as well as transport
+		 * and network header
+		 */
+		err = skb_copy_datagram_msg(skb, 0, msg, skb->len);
+		if (err) {
+			release_sock(sk);
+			return err;
+		}
+
+		copied += skb->len;
+	}
+
+	release_sock(sk);
+	return copied;
+}
+EXPORT_SYMBOL(udp_peek_sndq);
+
 /*
  * 	This should be easy, if there is something there we
  * 	return it, otherwise we block.
@@ -1826,9 +1851,24 @@ int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,
 	int off, err, peeking = flags & MSG_PEEK;
 	int is_udplite = IS_UDPLITE(sk);
 	bool checksum_valid = false;
+	struct udp_sock *up = udp_sk(sk);
 
 	if (flags & MSG_ERRQUEUE)
 		return ip_recv_error(sk, msg, len, addr_len);
+
+	if (unlikely(up->repair)) {
+		if (!peeking)
+			return -EPERM;
+
+		if (up->repair_queue == UDP_SEND_QUEUE)
+			return udp_peek_sndq(sk, msg, len);
+
+
+		if (up->repair_queue == UDP_NO_QUEUE)
+			return -EINVAL;
+
+		/* 'common' recv queue MSG_PEEK-ing */
+	}
 
 try_again:
 	off = sk_peek_offset(sk, flags);
@@ -1897,7 +1937,7 @@ try_again:
 						      (struct sockaddr *)sin);
 	}
 
-	if (udp_sk(sk)->gro_enabled)
+	if (up->gro_enabled)
 		udp_cmsg_recv(msg, sk, skb);
 
 	if (inet->cmsg_flags)
@@ -1911,7 +1951,7 @@ try_again:
 	return err;
 
 csum_copy_err:
-	if (!__sk_queue_drop_skb(sk, &udp_sk(sk)->reader_queue, skb, flags,
+	if (!__sk_queue_drop_skb(sk, &up->reader_queue, skb, flags,
 				 udp_skb_destructor)) {
 		UDP_INC_STATS(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
 		UDP_INC_STATS(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -2732,6 +2772,28 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 			val = USHRT_MAX;
 		up->pcrlen = val;
 		up->pcflag |= UDPLITE_RECV_CC;
+		break;
+
+	case UDP_REPAIR:
+		if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+			err = -EPERM;
+		if (valbool) {
+			up->repair = 1;
+			sk->sk_reuse = SK_NO_REUSE;
+			up->repair_queue = UDP_NO_QUEUE;
+		} else {
+			up->repair = 0;
+			sk->sk_reuse = SK_FORCE_REUSE;
+		}
+		break;
+
+	case UDP_REPAIR_QUEUE:
+		if (!up->repair)
+			err = -EPERM;
+		else if ((unsigned int) val < UDP_QUEUES_NR)
+			up->repair_queue = val;
+		else
+			err = -EINVAL;
 		break;
 
 	default:

@@ -29,6 +29,8 @@ struct udphdr {
 
 /* UDP socket options */
 #define UDP_CORK	1	/* Never send partially complete segments */
+#define UDP_REPAIR	2	/* UDP sock is under repair right now */
+#define UDP_REPAIR_QUEUE 3
 #define UDP_ENCAP	100	/* Set the socket to accept encapsulated packets */
 #define UDP_NO_CHECK6_TX 101	/* Disable sending checksum for UDP6X */
 #define UDP_NO_CHECK6_RX 102	/* Disable accpeting checksum for UDP6 */
@@ -43,5 +45,12 @@ struct udphdr {
 #define UDP_ENCAP_GTP1U		5 /* 3GPP TS 29.060 */
 #define UDP_ENCAP_RXRPC		6
 #define TCP_ENCAP_ESPINTCP	7 /* Yikes, this is really xfrm encap types. */
+
+enum {
+	UDP_NO_QUEUE,
+	UDP_RECV_QUEUE,
+	UDP_SEND_QUEUE,
+	UDP_QUEUES_NR
+};
 
 #endif /* _UAPI_LINUX_UDP_H */
