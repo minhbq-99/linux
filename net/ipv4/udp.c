@@ -1811,24 +1811,32 @@ int udp_read_sock(struct sock *sk, read_descriptor_t *desc,
 }
 EXPORT_SYMBOL(udp_read_sock);
 
-int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len)
+int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len, int *addr_len)
 {
+	struct inet_sock *inet = inet_sk(sk);
+	struct flowi4 *fl4;
 	struct sk_buff *skb;
-	int copied = 0, err = 0;
+	int copied = 0, err = 0, off;
+	DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
 
 	lock_sock(sk);
+
+	fl4 = &inet->cork.fl.u.ip4;
+	sin->sin_family = AF_INET;
+	sin->sin_port = fl4->fl4_dport;
+	sin->sin_addr.s_addr = fl4->daddr;
+	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
+	*addr_len = sizeof(*sin);
+
 	skb_queue_walk(&sk->sk_write_queue, skb) {
-		/*
-		 * Dump the datagram's data as well as transport
-		 * and network header
-		 */
-		err = skb_copy_datagram_msg(skb, 0, msg, skb->len);
+		off = skb_network_header_len(skb) + sizeof(struct udphdr);
+		err = skb_copy_datagram_msg(skb, off, msg, skb->len - off);
 		if (err) {
 			release_sock(sk);
 			return err;
 		}
 
-		copied += skb->len;
+		copied += skb->len - off;
 	}
 
 	release_sock(sk);
@@ -1861,8 +1869,7 @@ int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,
 			return -EPERM;
 
 		if (up->repair_queue == UDP_SEND_QUEUE)
-			return udp_peek_sndq(sk, msg, len);
-
+			return udp_peek_sndq(sk, msg, len, addr_len);
 
 		if (up->repair_queue == UDP_NO_QUEUE)
 			return -EINVAL;
