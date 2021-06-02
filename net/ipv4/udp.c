@@ -1811,25 +1811,35 @@ int udp_read_sock(struct sock *sk, read_descriptor_t *desc,
 }
 EXPORT_SYMBOL(udp_read_sock);
 
-int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len, int *addr_len)
+static int udp_copy_addr(struct sock *sk, struct msghdr *msg, int *addr_len)
 {
+
 	struct inet_sock *inet = inet_sk(sk);
 	struct flowi4 *fl4;
-	struct sk_buff *skb;
-	int copied = 0, err = 0, off;
 	DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
 
-	lock_sock(sk);
+	if (udp_sk(sk)->pending != AF_INET)
+		return -EINVAL;
 
-	fl4 = &inet->cork.fl.u.ip4;
-	sin->sin_family = AF_INET;
-	sin->sin_port = fl4->fl4_dport;
-	sin->sin_addr.s_addr = fl4->daddr;
-	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
-	*addr_len = sizeof(*sin);
+	if (sin) {
+		fl4 = &inet->cork.fl.u.ip4;
+		sin->sin_family = AF_INET;
+		sin->sin_port = fl4->fl4_dport;
+		sin->sin_addr.s_addr = fl4->daddr;
+		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
+		*addr_len = sizeof(*sin);
+	}
+
+	return 0;
+}
+
+int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	struct sk_buff *skb;
+	int copied = 0, err = 0, off;
 
 	skb_queue_walk(&sk->sk_write_queue, skb) {
-		off = skb_network_header_len(skb) + sizeof(struct udphdr);
+		off = skb_transport_offset(skb) + sizeof(struct udphdr);
 		err = skb_copy_datagram_msg(skb, off, msg, skb->len - off);
 		if (err) {
 			release_sock(sk);
@@ -1839,7 +1849,6 @@ int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len, int *addr_len
 		copied += skb->len - off;
 	}
 
-	release_sock(sk);
 	return copied;
 }
 EXPORT_SYMBOL(udp_peek_sndq);
@@ -1868,8 +1877,18 @@ int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,
 		if (!peeking)
 			return -EPERM;
 
-		if (up->repair_queue == UDP_SEND_QUEUE)
-			return udp_peek_sndq(sk, msg, len, addr_len);
+		if (up->repair_queue == UDP_SEND_QUEUE) {
+			lock_sock(sk);
+			err = udp_copy_addr(sk, msg, addr_len);
+			if (err) {
+				release_sock(sk);
+				return err;
+			}
+
+			err = udp_peek_sndq(sk, msg, len);
+			release_sock(sk);
+			return err;
+		}
 
 		if (up->repair_queue == UDP_NO_QUEUE)
 			return -EINVAL;
