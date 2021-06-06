@@ -1836,19 +1836,31 @@ static int udp_copy_addr(struct sock *sk, struct msghdr *msg, int *addr_len)
 int udp_peek_sndq(struct sock *sk, struct msghdr *msg, size_t len)
 {
 	struct sk_buff *skb;
-	int copied = 0, err = 0, off;
+	int copied = 0, err = 0, off, header_off, copy_len;
 
+	off = sk_peek_offset(sk, MSG_PEEK);
 	skb_queue_walk(&sk->sk_write_queue, skb) {
-		off = skb_transport_offset(skb) + sizeof(struct udphdr);
-		err = skb_copy_datagram_msg(skb, off, msg, skb->len - off);
-		if (err) {
-			release_sock(sk);
-			return err;
+		header_off = skb_transport_offset(skb) + sizeof(struct udphdr);
+		if (off > skb->len - header_off) {
+			off -= skb->len - header_off;
+			continue;
 		}
 
-		copied += skb->len - off;
+		if (len > skb->len - off - header_off)
+			copy_len = skb->len - off - header_off;
+		else
+			copy_len = len;
+
+		err = skb_copy_datagram_msg(skb, off + header_off, msg, copy_len);
+		if (err)
+			return err;
+
+		copied += copy_len;
+		len -= copy_len;
+		off = 0;
 	}
 
+	sk_peek_offset_bwd(sk, -copied);
 	return copied;
 }
 EXPORT_SYMBOL(udp_peek_sndq);
@@ -2801,8 +2813,10 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case UDP_REPAIR:
-		if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+		if (!sk_net_capable(sk, CAP_NET_ADMIN)) {
 			err = -EPERM;
+			break;
+		}
 		if (valbool) {
 			up->repair = 1;
 			sk->sk_reuse = SK_NO_REUSE;
@@ -2811,6 +2825,7 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 			up->repair = 0;
 			sk->sk_reuse = SK_FORCE_REUSE;
 		}
+		sk->sk_peek_off = 0;
 		break;
 
 	case UDP_REPAIR_QUEUE:
