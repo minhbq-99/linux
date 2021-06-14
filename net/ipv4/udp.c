@@ -2905,6 +2905,14 @@ int udp_lib_getsockopt(struct sock *sk, int level, int optname,
 		val = up->pcrlen;
 		break;
 
+	case UDP_REPAIR:
+		val = up->repair;
+		break;
+
+	case UDP_REPAIR_QUEUE:
+		val = up->repair_queue;
+		break;
+
 	default:
 		return -ENOPROTOOPT;
 	}
