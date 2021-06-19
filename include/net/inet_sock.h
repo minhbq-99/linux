@@ -163,6 +163,13 @@ struct inet_cork {
 	u32			mark;
 };
 
+struct user_cork {
+	__u16			ttl;
+	__u16			gso_size;
+	__s16			tos;
+	__u16			tsflags;
+};
+
 struct inet_cork_full {
 	struct inet_cork	base;
 	struct flowi		fl;

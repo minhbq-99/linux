@@ -10,18 +10,28 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/udp.h>
+#include <stdint.h>
 
 #define PORT 5000
 #define BUF_SIZE 256
 
-#define UDP_REPAIR	2
-#define UDP_REPAIR_QUEUE 3
+#define UDP_REPAIR		2
+#define UDP_REPAIR_QUEUE	3
+#define UDP_REPAIR_CORK		4
+#define UDP_SEGMENT		103
 
 enum {
 	UDP_NO_QUEUE,
 	UDP_RECV_QUEUE,
 	UDP_SEND_QUEUE,
 	UDP_QUEUES_NR
+};
+
+struct user_cork {
+	unsigned short		ttl;
+	unsigned short		gso_size;
+	short			tos;
+	unsigned short		tsflags;
 };
 
 char send_buf[BUF_SIZE];
@@ -31,6 +41,7 @@ struct udp_dump {
 		struct sockaddr_in6 addr_v6;
 	};
 	char buf[BUF_SIZE];
+	struct user_cork ucork;
 };
 
 struct sockaddr_in addr_v4;
@@ -101,6 +112,8 @@ struct udp_dump *checkpoint(int sock, int is_udp4)
 	unsigned int addr_len;
 	struct udp_dump *dump;
 	struct sockaddr *addr;
+	struct user_cork *ucork;
+	socklen_t cork_len;
 
 	dump = malloc(sizeof(*dump));
 	if (!dump)
@@ -113,11 +126,17 @@ struct udp_dump *checkpoint(int sock, int is_udp4)
 		addr = (struct sockaddr *) &dump->addr_v6;
 		addr_len = sizeof(dump->addr_v6);
 	}
+	ucork = &dump->ucork;
 
 	val = 1;
 	ret = setsockopt(sock, SOL_UDP, UDP_REPAIR, &val, sizeof(val));
 	if (ret < 0)
 		error(1, errno, "setsockopt udp_repair");
+
+	cork_len = sizeof(*ucork);
+	ret = getsockopt(sock, SOL_UDP, UDP_REPAIR_CORK, ucork, &cork_len);
+	if (ret < 0)
+		error(1, errno, "getsockopt udp_repair_cork");
 
 	val = UDP_SEND_QUEUE;
 	ret = setsockopt(sock, SOL_UDP, UDP_REPAIR_QUEUE, &val, sizeof(val));
@@ -141,22 +160,82 @@ struct udp_dump *checkpoint(int sock, int is_udp4)
 	return dump;
 }
 
-void restore(int sock, struct udp_dump *dump, int is_udp4)
+void send_one(int sock, struct udp_dump *dump, int is_udp4)
 {
-	struct sockaddr *addr;
-	int val;
-	unsigned int addr_len;
+	struct msghdr msg = {0};
+	struct iovec iov = {0};
+	struct cmsghdr *cm;
+	int ret, controllen;
+	struct user_cork *ucork = &dump->ucork;
+	char *control;
+
+	iov.iov_base = dump->buf;
+	iov.iov_len = BUF_SIZE;
+
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
 
 	if (is_udp4) {
-		addr = (struct sockaddr *) &dump->addr_v4;
-		addr_len = sizeof(dump->addr_v4);
+		msg.msg_name = (struct sockaddr *) &dump->addr_v4;
+		msg.msg_namelen = sizeof(dump->addr_v4);
 	} else {
-		addr = (struct sockaddr *) &dump->addr_v6;
-		addr_len = sizeof(dump->addr_v6);
+		msg.msg_name = (struct sockaddr *) &dump->addr_v6;
+		msg.msg_namelen = sizeof(dump->addr_v6);
 	}
 
-	if (sendto(sock, dump->buf, BUF_SIZE, 0, addr, addr_len) < 0)
+	controllen = CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(uint32_t));
+	if (ucork->tos >= 0)
+		controllen += CMSG_SPACE(sizeof(int));
+
+	if (ucork->ttl)
+		controllen += CMSG_SPACE(sizeof(int));
+
+	control = malloc(controllen);
+	if (!control)
+		error(1, 0, "malloc");
+
+	msg.msg_control = control;
+	msg.msg_controllen = controllen;
+
+	cm = CMSG_FIRSTHDR(&msg);
+	cm->cmsg_level = SOL_UDP;
+	cm->cmsg_type = UDP_SEGMENT;
+	cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+	*((uint16_t *) CMSG_DATA(cm)) = ucork->gso_size;
+
+	if (ucork->ttl) {
+		cm = CMSG_NXTHDR(&msg, cm);
+		cm->cmsg_level = SOL_IP;
+		cm->cmsg_type = IP_TTL;
+		cm->cmsg_len = CMSG_LEN(sizeof(int));
+		*((int *) CMSG_DATA(cm)) = ucork->ttl;
+	}
+
+	if (ucork->tos >= 0) {
+		cm = CMSG_NXTHDR(&msg, cm);
+		cm->cmsg_level = SOL_IP;
+		cm->cmsg_type = IP_TOS;
+		cm->cmsg_len = CMSG_LEN(sizeof(int));
+		*((int *) CMSG_DATA(cm)) = ucork->tos;
+	}
+
+	cm = CMSG_NXTHDR(&msg, cm);
+	cm->cmsg_level = SOL_SOCKET;
+	cm->cmsg_type = SO_TIMESTAMPING_OLD;
+	cm->cmsg_len = CMSG_LEN(sizeof(uint32_t));
+	*((uint32_t *) CMSG_DATA(cm)) = ucork->tsflags;
+
+	ret = sendmsg(sock, &msg, 0);
+	if (ret < 0)
 		error(1, errno, "send data");
+	free(control);
+}
+
+void restore(int sock, struct udp_dump *dump, int is_udp4)
+{
+	int val;
+
+	send_one(sock, dump, is_udp4);
 
 	val = 0;
 	if (setsockopt(sock, SOL_UDP, UDP_CORK, &val, sizeof(val)) < 0)
@@ -198,6 +277,7 @@ void run_test(int is_udp4_sock, int is_udp4_packet)
 
 	close(server_sock);
 	close(client_sock);
+	free(dump);
 }
 
 void init()

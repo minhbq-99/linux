@@ -31,6 +31,7 @@ struct udphdr {
 #define UDP_CORK	1	/* Never send partially complete segments */
 #define UDP_REPAIR	2	/* UDP sock is under repair right now */
 #define UDP_REPAIR_QUEUE 3
+#define UDP_REPAIR_CORK 4
 #define UDP_ENCAP	100	/* Set the socket to accept encapsulated packets */
 #define UDP_NO_CHECK6_TX 101	/* Disable sending checksum for UDP6X */
 #define UDP_NO_CHECK6_RX 102	/* Disable accpeting checksum for UDP6 */

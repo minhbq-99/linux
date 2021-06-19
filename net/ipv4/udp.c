@@ -2829,8 +2829,10 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case UDP_REPAIR_QUEUE:
-		if (!up->repair)
+		if (!up->repair) {
 			err = -EPERM;
+			break;
+		}
 		else if ((unsigned int) val < UDP_QUEUES_NR)
 			up->repair_queue = val;
 		else
@@ -2860,6 +2862,10 @@ int udp_lib_getsockopt(struct sock *sk, int level, int optname,
 		       char __user *optval, int __user *optlen)
 {
 	struct udp_sock *up = udp_sk(sk);
+	struct inet_sock *inet = inet_sk(sk);
+	struct inet_cork *cork = &inet->cork.base;
+	struct user_cork ucork;
+	u8 flags;
 	int val, len;
 
 	if (get_user(len, optlen))
@@ -2912,6 +2918,32 @@ int udp_lib_getsockopt(struct sock *sk, int level, int optname,
 	case UDP_REPAIR_QUEUE:
 		val = up->repair_queue;
 		break;
+
+	case UDP_REPAIR_CORK:
+		if (!up->repair)
+			return -EPERM;
+
+		if (get_user(len, optlen))
+			return -EFAULT;
+
+		len = min_t(unsigned int, len, sizeof(ucork));
+
+		memset(&ucork, 0, sizeof(ucork));
+		ucork.gso_size = cork->gso_size;
+		ucork.ttl = cork->ttl;
+		ucork.tos = cork->tos;
+		flags = cork->tx_flags;
+		if (flags & SKBTX_HW_TSTAMP)
+			ucork.tsflags |= SOF_TIMESTAMPING_TX_HARDWARE;
+		if (flags & SKBTX_SW_TSTAMP)
+			ucork.tsflags |= SOF_TIMESTAMPING_TX_SOFTWARE;
+		if (flags & SKBTX_SCHED_TSTAMP)
+			ucork.tsflags |= SOF_TIMESTAMPING_TX_SCHED;
+		if (put_user(len, optlen))
+			return -EFAULT;
+		if (copy_to_user(optval, &ucork, len))
+			return -EFAULT;
+		return 0;
 
 	default:
 		return -ENOPROTOOPT;
