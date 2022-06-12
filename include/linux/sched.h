@@ -2340,6 +2340,8 @@ static inline void rseq_execve(struct task_struct *t)
 	t->rseq_event_mask = 0;
 }
 
+int rseq_sigreturn(struct pt_regs *regs);
+
 #else
 
 static inline void rseq_set_notify_resume(struct task_struct *t)
@@ -2363,6 +2365,9 @@ static inline void rseq_fork(struct task_struct *t, unsigned long clone_flags)
 {
 }
 static inline void rseq_execve(struct task_struct *t)
+{
+}
+static inline int rseq_sigreturn(struct pt_regs *regs)
 {
 }
 

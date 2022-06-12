@@ -172,13 +172,15 @@ static int rseq_get_rseq_cs(struct task_struct *t, struct rseq_cs *rseq_cs)
 
 static int rseq_need_restart(struct task_struct *t, u32 cs_flags)
 {
-	u32 flags, event_mask;
+	u32 old_flags, flags, event_mask;
 	int ret;
 
 	/* Get thread flags. */
-	ret = get_user(flags, &t->rseq->flags);
+	ret = get_user(old_flags, &t->rseq->flags);
 	if (ret)
 		return ret;
+
+	flags = old_flags;
 
 	/* Take critical section flags into account. */
 	flags |= cs_flags;
@@ -202,6 +204,21 @@ static int rseq_need_restart(struct task_struct *t, u32 cs_flags)
 	event_mask = t->rseq_event_mask;
 	t->rseq_event_mask = 0;
 	preempt_enable();
+
+	/*
+	 * If we don't restart on signal event, set the
+	 * RSEQ_CS_FLAG_IN_SIGNAL_HANDLER flag so that later rseq_ip_fixup
+	 * doesn't clear rseq_cs pointer as the IP is outside of critical
+	 * section.
+	 */
+	if ((flags & RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL) &&
+	    (event_mask & RSEQ_EVENT_SIGNAL) &&
+	    !(old_flags & RSEQ_CS_FLAG_IN_SIGNAL_HANDLER)) {
+		old_flags |= RSEQ_CS_FLAG_IN_SIGNAL_HANDLER;
+		ret = put_user(old_flags, &t->rseq->flags);
+		if (ret)
+			return ret;
+	}
 
 	return !!(event_mask & ~flags);
 }
@@ -248,10 +265,23 @@ static int rseq_ip_fixup(struct pt_regs *regs)
 	/*
 	 * Handle potentially not being within a critical section.
 	 * If not nested over a rseq critical section, restart is useless.
-	 * Clear the rseq_cs pointer and return.
+	 * In case the RSEQ_CS_FLAG_IN_SIGNAL_HANDLER is set, we are in
+	 * signal handlers and later return to critical section so don't
+	 * clear rseq_cs pointer.
+	 * Otherwise, clear the rseq_cs pointer and return.
 	 */
-	if (!in_rseq_cs(ip, &rseq_cs))
-		return clear_rseq_cs(t);
+	if (!in_rseq_cs(ip, &rseq_cs)) {
+		u32 flags;
+
+		ret = get_user(flags, &t->rseq->flags);
+		if (ret)
+			return ret;
+		if (flags & RSEQ_CS_FLAG_IN_SIGNAL_HANDLER)
+			return 0;
+		else
+			return clear_rseq_cs(t);
+	}
+
 	ret = rseq_need_restart(t, rseq_cs.flags);
 	if (ret <= 0)
 		return ret;
@@ -318,6 +348,46 @@ void rseq_syscall(struct pt_regs *regs)
 		return;
 	if (rseq_get_rseq_cs(t, &rseq_cs) || in_rseq_cs(ip, &rseq_cs))
 		force_sig(SIGSEGV);
+}
+
+#endif
+
+#ifdef CONFIG_RSEQ
+
+int rseq_sigreturn(struct pt_regs *regs)
+{
+	int ret;
+	struct rseq_cs rseq_cs;
+	struct task_struct *t = current;
+
+	if (t->rseq) {
+		u32 flags;
+
+		ret = get_user(flags, &t->rseq->flags);
+		if (ret)
+			return ret;
+
+		if (flags & RSEQ_CS_FLAG_IN_SIGNAL_HANDLER) {
+			ret = rseq_get_rseq_cs(t, &rseq_cs);
+			if (ret)
+				return ret;
+
+			/*
+			 * If the returned IP is in critical section, it
+			 * means we handle all the possible nested signal,
+			 * so unset the RSEQ_CS_FLAG_IN_SIGNAL_HANDLER.
+			 */
+			if (in_rseq_cs(regs->ip, &rseq_cs)) {
+				flags &= ~RSEQ_CS_FLAG_IN_SIGNAL_HANDLER;
+
+				ret = put_user(flags, &t->rseq->flags);
+				if (ret)
+					return ret;
+			}
+		}
+	}
+
+	return 0;
 }
 
 #endif

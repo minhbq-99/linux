@@ -26,6 +26,7 @@ enum rseq_cs_flags_bit {
 	RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT_BIT	= 0,
 	RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT	= 1,
 	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT	= 2,
+	RSEQ_CS_FLAG_IN_SIGNAL_HANDLER_BIT	= 3,
 };
 
 enum rseq_cs_flags {
@@ -35,6 +36,8 @@ enum rseq_cs_flags {
 		(1U << RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT),
 	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE	=
 		(1U << RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT),
+	RSEQ_CS_FLAG_IN_SIGNAL_HANDLER		=
+		(1U << RSEQ_CS_FLAG_IN_SIGNAL_HANDLER_BIT),
 };
 
 /*
@@ -115,7 +118,7 @@ struct rseq {
 	 * Restartable sequences flags field.
 	 *
 	 * This field should only be updated by the thread which
-	 * registered this data structure. Read by the kernel.
+	 * registered this data structure. Read and set by the kernel.
 	 * Mainly used for single-stepping through rseq critical sections
 	 * with debuggers.
 	 *
@@ -128,6 +131,9 @@ struct rseq {
 	 * - RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE
 	 *     Inhibit instruction sequence block restart on migration for
 	 *     this thread.
+	 * - RSEQ_CS_FLAG_IN_SIGNAL_HANDLER
+	 *     Mark that this thread is in critical section but currently in
+	 *     signal handlers, so don't clear the rseq_cs field.
 	 */
 	__u32 flags;
 } __attribute__((aligned(4 * sizeof(__u64))));

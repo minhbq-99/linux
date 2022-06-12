@@ -646,6 +646,10 @@ SYSCALL_DEFINE0(sigreturn)
 	 */
 	if (!restore_sigcontext(regs, &frame->sc, 0))
 		goto badframe;
+
+	if (rseq_sigreturn(regs))
+		goto badframe;
+
 	return regs->ax;
 
 badframe:
@@ -676,6 +680,9 @@ SYSCALL_DEFINE0(rt_sigreturn)
 		goto badframe;
 
 	if (restore_altstack(&frame->uc.uc_stack))
+		goto badframe;
+
+	if (rseq_sigreturn(regs))
 		goto badframe;
 
 	return regs->ax;
