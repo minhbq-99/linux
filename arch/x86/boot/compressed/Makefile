@@ -18,7 +18,8 @@
 #	compressed vmlinux.bin.all + u32 size of vmlinux.bin.all
 
 targets := vmlinux vmlinux.bin vmlinux.bin.gz vmlinux.bin.bz2 vmlinux.bin.lzma \
-	vmlinux.bin.xz vmlinux.bin.lzo vmlinux.bin.lz4 vmlinux.bin.zst
+	vmlinux.bin.xz vmlinux.bin.lzo vmlinux.bin.lz4 vmlinux.bin.zst \
+	vmlinx.bin.none
 
 # CLANG_FLAGS must come before any cc-disable-warning or cc-option calls in
 # case of cross compiling, as it has the '--target=' flag, which is needed to
@@ -132,6 +133,13 @@ $(obj)/vmlinux.relocs: vmlinux.unstripped FORCE
 vmlinux.bin.all-y := $(obj)/vmlinux.bin
 vmlinux.bin.all-$(CONFIG_X86_NEED_RELOCS) += $(obj)/vmlinux.relocs
 
+quiet_cmd_copy_with_size = COPY    $@
+	cmd_copy_with_size = \
+	cat $(real-prereqs) > $@; \
+	$(PYTHON3) -c \
+		"import sys, os; \
+		sys.stdout.buffer.write(os.path.getsize(sys.argv[1]).to_bytes(4, 'little'))" $@ >> $@
+
 $(obj)/vmlinux.bin.gz: $(vmlinux.bin.all-y) FORCE
 	$(call if_changed,gzip)
 $(obj)/vmlinux.bin.bz2: $(vmlinux.bin.all-y) FORCE
@@ -146,6 +154,8 @@ $(obj)/vmlinux.bin.lz4: $(vmlinux.bin.all-y) FORCE
 	$(call if_changed,lz4_with_size)
 $(obj)/vmlinux.bin.zst: $(vmlinux.bin.all-y) FORCE
 	$(call if_changed,zstd22_with_size)
+$(obj)/vmlinux.bin.none: $(vmlinux.bin.all-y) FORCE
+	$(call if_changed,copy_with_size)
 
 suffix-$(CONFIG_KERNEL_GZIP)	:= gz
 suffix-$(CONFIG_KERNEL_BZIP2)	:= bz2
@@ -154,6 +164,7 @@ suffix-$(CONFIG_KERNEL_XZ)	:= xz
 suffix-$(CONFIG_KERNEL_LZO) 	:= lzo
 suffix-$(CONFIG_KERNEL_LZ4) 	:= lz4
 suffix-$(CONFIG_KERNEL_ZSTD)	:= zst
+suffix-$(CONFIG_KERNEL_NONE)	:= none
 
 quiet_cmd_mkpiggy = MKPIGGY $@
       cmd_mkpiggy = $(obj)/mkpiggy $< > $@

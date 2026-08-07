@@ -87,6 +87,19 @@ static int cols __section(".data");
 #ifdef CONFIG_KERNEL_ZSTD
 #include "../../../../lib/decompress_unzstd.c"
 #endif
+
+#ifdef CONFIG_KERNEL_NONE
+static int __decompress(unsigned char *buf, long in_len,
+			long (*fill)(void*, unsigned long),
+			long (*flush)(void*, unsigned long),
+			unsigned char *output, long out_len,
+			long *posp,
+			void (*error)(char *x))
+{
+	memcpy(output, buf, out_len);
+	return 0;
+}
+#endif
 /*
  * NOTE: When adding a new decompressor, please update the analysis in
  * ../header.S.
